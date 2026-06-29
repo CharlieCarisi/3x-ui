@@ -392,6 +392,54 @@ func TestCheckPortConflict_NodeScope(t *testing.T) {
 	}
 }
 
+func TestAddInbound_AllowsSamePortAcrossDifferentNodes(t *testing.T) {
+	setupConflictDB(t)
+	db := database.GetDB()
+	for _, node := range []model.Node{
+		{Id: 1, Name: "node-1", Address: "node1.example.com", Port: 2053, ApiToken: "token-1", Enable: false, Status: "offline"},
+		{Id: 2, Name: "node-2", Address: "node2.example.com", Port: 2053, ApiToken: "token-2", Enable: false, Status: "offline"},
+	} {
+		if err := db.Create(&node).Error; err != nil {
+			t.Fatalf("seed node %d: %v", node.Id, err)
+		}
+	}
+
+	svc := &InboundService{}
+	mkInbound := func(nodeID int, remark string) *model.Inbound {
+		return &model.Inbound{
+			UserId:         1,
+			Remark:         remark,
+			Enable:         false,
+			Listen:         "0.0.0.0",
+			Port:           443,
+			Protocol:       model.VLESS,
+			Settings:       `{"clients":[]}`,
+			StreamSettings: `{"network":"tcp"}`,
+			NodeID:         &nodeID,
+		}
+	}
+
+	first, _, err := svc.AddInbound(mkInbound(1, "node 1"))
+	if err != nil {
+		t.Fatalf("AddInbound node 1: %v", err)
+	}
+	second, _, err := svc.AddInbound(mkInbound(2, "node 2"))
+	if err != nil {
+		t.Fatalf("AddInbound node 2 should allow same port on a different node: %v", err)
+	}
+	if first.Tag != "n1-in-443-tcp" {
+		t.Fatalf("node 1 tag = %q, want n1-in-443-tcp", first.Tag)
+	}
+	if second.Tag != "n2-in-443-tcp" {
+		t.Fatalf("node 2 tag = %q, want n2-in-443-tcp", second.Tag)
+	}
+
+	_, _, err = svc.AddInbound(mkInbound(1, "node 1 duplicate"))
+	if err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("same-node same-port AddInbound should conflict, got %v", err)
+	}
+}
+
 // when the caller passes an explicit non-empty Tag that doesn't collide,
 // resolveInboundTag returns it verbatim. this is the cross-panel path:
 // the central panel picks a tag, pushes the inbound to a node, and the
