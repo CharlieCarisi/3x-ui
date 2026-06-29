@@ -67,6 +67,44 @@ func TestUpdateInbound_NodeTagKeepsPrefixWhenNodeIdOmitted(t *testing.T) {
 	}
 }
 
+// updating a node inbound may arrive without nodeId in the request payload.
+// Conflict validation must use the persisted NodeID before checking ports, so
+// a node inbound can keep sharing its port with a local inbound.
+func TestUpdateInbound_UsesStoredNodeIDForPortConflictWhenOmitted(t *testing.T) {
+	setupConflictDB(t)
+	nodeID := 1
+	if err := database.GetDB().Create(&model.Node{
+		Id:       nodeID,
+		Name:     "node-1",
+		Address:  "node1.example.com",
+		Port:     2053,
+		ApiToken: "token",
+		Enable:   false,
+		Status:   "offline",
+	}).Error; err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	seedInboundConflict(t, "in-443-tcp", "0.0.0.0", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`)
+	seedInboundConflictNode(t, "n1-in-443-tcp", "0.0.0.0", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &nodeID)
+
+	var existing model.Inbound
+	if err := database.GetDB().Where("tag = ?", "n1-in-443-tcp").First(&existing).Error; err != nil {
+		t.Fatalf("read seeded row: %v", err)
+	}
+
+	svc := &InboundService{}
+	update := existing
+	update.Remark = "updated without node id"
+	update.NodeID = nil
+	got, _, err := svc.UpdateInbound(&update)
+	if err != nil {
+		t.Fatalf("UpdateInbound should allow same port on stored node: %v", err)
+	}
+	if got.NodeID == nil || *got.NodeID != nodeID {
+		t.Fatalf("stored node id was not restored, got %#v", got.NodeID)
+	}
+}
+
 // a tag the user set by hand (doesn't match the canonical shape) survives a
 // port change untouched.
 func TestUpdateInbound_KeepsCustomTagOnPortChange(t *testing.T) {

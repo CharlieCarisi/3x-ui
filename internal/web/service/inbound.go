@@ -954,6 +954,16 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	s.normalizeMtprotoSecret(inbound)
 	inbound.SubSortIndex = normalizeSubSortIndex(inbound.SubSortIndex)
 
+	oldInbound, err := s.GetInbound(inbound.Id)
+	if err != nil {
+		return inbound, false, err
+	}
+	// Phase 1 does not support migrating an inbound between local and node
+	// runtimes. The update payload may omit nodeId, so the stored NodeID must
+	// drive validation; otherwise a node inbound can be checked as local and
+	// falsely collide with a local inbound on the same port.
+	inbound.NodeID = oldInbound.NodeID
+
 	conflict, err := s.checkPortConflict(inbound, inbound.Id)
 	if err != nil {
 		return inbound, false, err
@@ -962,11 +972,6 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		return inbound, false, common.NewError(conflict.String())
 	}
 
-	oldInbound, err := s.GetInbound(inbound.Id)
-	if err != nil {
-		return inbound, false, err
-	}
-	inbound.NodeID = oldInbound.NodeID
 	// Capture the pre-edit routing state before oldInbound.Settings is replaced
 	// with the new settings further down, then ensure a routed inbound keeps a
 	// stable egress port (reusing the one already stored).
